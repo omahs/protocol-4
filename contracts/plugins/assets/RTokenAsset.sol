@@ -23,6 +23,10 @@ contract RTokenAsset is IAsset {
 
     uint192 public immutable override maxTradeVolume; // {UoA}
 
+    uint48 public lastSave; // {s} The timestamp when prices were last saved
+
+    Price internal _price; // {UoA/tok} The last saved price
+
     /// @param maxTradeVolume_ {UoA} The max trade volume, in UoA
     constructor(IRToken erc20_, uint192 maxTradeVolume_) {
         require(address(erc20_) != address(0), "missing erc20");
@@ -59,45 +63,38 @@ contract RTokenAsset is IAsset {
         high = range.top.mulDiv(highBUPrice, supply);
     }
 
-    // solhint-disable no-empty-blocks
     function refresh() public virtual override {
-        // TODO write to IPriceCache in refresh()
+        // Can assume it will go last in the assetRegistry.refresh() process
+        try this.tryPrice() returns (uint192 low, uint192 high) {
+            // Save prices if priced
+            if (high < FIX_MAX) {
+                assert(low <= high);
+                _price = Price(low, high);
+                lastSave = uint48(block.timestamp);
+            } else {
+                // must be unpriced
+                assert(low == 0);
+            }
+        } catch (bytes memory errData) {
+            // see: docs/solidity-style.md#Catching-Empty-Data
+            if (errData.length == 0) revert(); // solhint-disable-line reason-string
+        }
     }
-
-    // solhint-enable no-empty-blocks
 
     /// Should not revert
     /// @return {UoA/tok} The lower end of the price estimate
     /// @return {UoA/tok} The upper end of the price estimate
     function price() public view virtual returns (uint192, uint192) {
-        try this.tryPrice() returns (uint192 low, uint192 high) {
-            assert(low <= high);
-            return (low, high);
-        } catch (bytes memory errData) {
-            // see: docs/solidity-style.md#Catching-Empty-Data
-            if (errData.length == 0) revert(); // solhint-disable-line reason-string
-            return (0, FIX_MAX);
-        }
+        // Don't decay the price
+        return (_price.low, _price.high);
     }
 
     /// Should not revert
     /// lotLow should be nonzero when the asset might be worth selling
     /// @return lotLow {UoA/tok} The lower end of the lot price estimate
     /// @return lotHigh {UoA/tok} The upper end of the lot price estimate
-    function lotPrice() external view returns (uint192 lotLow, uint192 lotHigh) {
-        (uint192 buLow, uint192 buHigh) = basketHandler.lotPrice(); // {UoA/BU}
-
-        // Here we take advantage of the fact that we know RToken has 18 decimals
-        // to convert between uint256 an uint192. Fits due to assumed max totalSupply.
-        uint192 supply = _safeWrap(IRToken(address(erc20)).totalSupply());
-
-        if (supply == 0) return (buLow, buHigh);
-
-        BasketRange memory range = basketRange(); // {BU}
-
-        // {UoA/tok} = {BU} * {UoA/BU} / {tok}
-        lotLow = range.bottom.mulDiv(buLow, supply);
-        lotHigh = range.top.mulDiv(buHigh, supply);
+    function lotPrice() external view virtual returns (uint192 lotLow, uint192 lotHigh) {
+        return (_price.low, _price.high);
     }
 
     /// @return {tok} The balance of the ERC20 in whole tokens

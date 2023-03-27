@@ -57,8 +57,8 @@ contract CvxVolatileCollateral is CvxStableCollateral {
 
             // Save prices if priced
             if (high < FIX_MAX) {
-                savedLowPrice = low;
-                savedHighPrice = high;
+                assert(low <= high);
+                _price = Price(low, high);
                 lastSave = uint48(block.timestamp);
             } else {
                 // must be unpriced

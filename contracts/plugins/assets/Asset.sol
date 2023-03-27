@@ -4,6 +4,7 @@ pragma solidity 0.8.17;
 import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "../../interfaces/IAsset.sol";
+import "../../interfaces/IRTokenOracle.sol";
 import "./OracleLib.sol";
 
 contract Asset is IAsset {
@@ -26,9 +27,7 @@ contract Asset is IAsset {
 
     uint48 public immutable priceTimeout; // {s} The period over which `savedHighPrice` decays to 0
 
-    uint192 public savedLowPrice; // {UoA/tok} The low price of the token during the last update
-
-    uint192 public savedHighPrice; // {UoA/tok} The high price of the token during the last update
+    Price internal _price; // {UoA/tok} The last saved price
 
     uint48 public lastSave; // {s} The timestamp when prices were last saved
 
@@ -90,8 +89,8 @@ contract Asset is IAsset {
 
             // Save prices if priced
             if (high < FIX_MAX) {
-                savedLowPrice = low;
-                savedHighPrice = high;
+                assert(low <= high);
+                _price = Price(low, high);
                 lastSave = uint48(block.timestamp);
             } else {
                 // must be unpriced
@@ -108,43 +107,23 @@ contract Asset is IAsset {
     /// @return {UoA/tok} The lower end of the price estimate
     /// @return {UoA/tok} The upper end of the price estimate
     function price() public view virtual returns (uint192, uint192) {
-        try this.tryPrice() returns (uint192 low, uint192 high, uint192) {
-            assert(low <= high);
-            return (low, high);
-        } catch (bytes memory errData) {
-            // see: docs/solidity-style.md#Catching-Empty-Data
-            if (errData.length == 0) revert(); // solhint-disable-line reason-string
-            return (0, FIX_MAX);
-        }
+        // if the price feed is old or broken, low decays to 0 over the priceTimeout
+
+        uint48 delta = uint48(block.timestamp) - lastSave; // {s}
+        if (delta == 0) return (_price.low, _price.high); // shortcut typical case
+        if (delta >= priceTimeout) return (0, 0); // no price after timeout elapses
+
+        // {UoA/tok} = {UoA/tok} * ({s} - {s}) / {s}
+        return (_price.low.mul(divuu(priceTimeout - delta, priceTimeout)), _price.high);
     }
 
     /// Should not revert
     /// lotLow should be nonzero when the asset might be worth selling
     /// @dev Should be general enough to not need to be overridden
-    /// @return lotLow {UoA/tok} The lower end of the lot price estimate
-    /// @return lotHigh {UoA/tok} The upper end of the lot price estimate
+    /// @return lotLow {UoA/tok} The last saved low price
+    /// @return lotHigh {UoA/tok} The last saved high price
     function lotPrice() external view virtual returns (uint192 lotLow, uint192 lotHigh) {
-        try this.tryPrice() returns (uint192 low, uint192 high, uint192) {
-            // if the price feed is still functioning, use that
-            lotLow = low;
-            lotHigh = high;
-        } catch (bytes memory errData) {
-            // see: docs/solidity-style.md#Catching-Empty-Data
-            if (errData.length == 0) revert(); // solhint-disable-line reason-string
-
-            // if the price feed is broken, use a decayed historical value
-
-            uint48 delta = uint48(block.timestamp) - lastSave; // {s}
-            if (delta >= priceTimeout) return (0, 0); // no price after timeout elapses
-
-            // {1} = {s} / {s}
-            uint192 lotMultiplier = divuu(priceTimeout - delta, priceTimeout);
-
-            // {UoA/tok} = {UoA/tok} * {1}
-            lotLow = savedLowPrice.mul(lotMultiplier);
-            lotHigh = savedHighPrice.mul(lotMultiplier);
-        }
-        assert(lotLow <= lotHigh);
+        return (_price.low, _price.high);
     }
 
     /// @return {tok} The balance of the ERC20 in whole tokens

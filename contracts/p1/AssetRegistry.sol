@@ -24,6 +24,9 @@ contract AssetRegistryP1 is ComponentP1, IAssetRegistry {
     // Registered Assets
     mapping(IERC20 => IAsset) private assets;
 
+    // === Added in 2.2.0 ===
+    IRToken private rToken;
+
     /* ==== Contract Invariants ====
        The contract state is just the mapping assets; _erc20s is ignored in properties.
 
@@ -44,15 +47,27 @@ contract AssetRegistryP1 is ComponentP1, IAssetRegistry {
         }
     }
 
+    /// Added in 2.2.0 to set rToken
+    /// TODO should call this as a final step in the proposal that upgrades to this impl
+    function cacheComponents() public {
+        basketHandler = main.basketHandler();
+        backingManager = main.backingManager();
+        rToken = main.rToken();
+    }
+
     /// Update the state of all assets
     /// @custom:refresher
-    // actions: calls refresh(c) for c in keys(assets) when c.isCollateral()
+    // actions: calls refresh(c) for c in keys(assets) when c.isCollateral(), with RToken last
     function refresh() public {
         // It's a waste of gas to require notPausedOrFrozen because assets can be updated directly
         uint256 length = _erc20s.length();
         for (uint256 i = 0; i < length; ++i) {
-            assets[IERC20(_erc20s.at(i))].refresh();
+            IERC20 erc20 = IERC20(_erc20s.at(i));
+            if (address(erc20) != address(rToken)) assets[erc20].refresh();
         }
+
+        // Refresh RTokenAsset last, since it depends on all the other prices
+        assets[IERC20(address(rToken))].refresh();
     }
 
     /// Register `asset`
@@ -201,5 +216,5 @@ contract AssetRegistryP1 is ComponentP1, IAssetRegistry {
      * variables without shifting down storage in the inheritance chain.
      * See https://docs.openzeppelin.com/contracts/4.x/upgradeable#storage_gaps
      */
-    uint256[47] private __gap;
+    uint256[46] private __gap;
 }

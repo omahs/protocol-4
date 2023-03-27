@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BlueOak-1.0.0
 pragma solidity 0.8.17;
 
+import "contracts/interfaces/IAssetRegistry.sol";
 import "contracts/interfaces/IRTokenOracle.sol";
 
 struct Cache {
@@ -23,8 +24,9 @@ contract RTokenOracle is IRTokenOracle {
 
         // Refresh cache if stale
         if (forceRefresh || block.timestamp - cache.savedAt > cacheTimeout) {
-            IAsset rTokenAsset = rToken.main().assetRegistry().toAsset(IERC20(address(rToken)));
-            (cache.price.low, cache.price.high) = rTokenAsset.price();
+            IAssetRegistry reg = rToken.main().assetRegistry();
+            reg.refresh();
+            (cache.price.low, cache.price.high) = reg.toAsset(IERC20(address(rToken))).price();
             cache.savedAt = uint48(block.timestamp); // block time assumed reasonable
         }
 
